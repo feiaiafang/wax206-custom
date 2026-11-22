@@ -18,20 +18,36 @@
 
 ## 用法
 
+两个版本并存，按固件来源选：
+
+| 固件来源 | workflow | 补丁脚本 | 最大 firmware |
+|---|---|---|---|
+| ImmortalWrt（`immortalwrt.git`，firmware-selector 同源） | `build-immortalwrt.yml` | `patch-immortalwrt-full256.py` | **253 MiB（吃满）** |
+| OpenWrt（`openwrt.git`，原仓库） | `build.yml` | `patch-wax206-full256.py` | 178 MiB |
+
 ```bash
-# 1. 改清单
-vi packages.txt
+# ImmortalWrt：Actions 里跑 "Build WAX206 ImmortalWrt 25.12 扩展分区"
+#   输入 fw_size=full|178m，build_ext4=true/false
 
-# 2. 本地预演（可选，需要一份已 update 过的 OpenWrt 源码）
-bash scripts/gen-config.sh /path/to/openwrt
-
-# 3. 推送，在 Actions 里跑 "Build WAX206 OpenWrt 256M (custom packages)"
+# 本地预演（不编译，只验证配置和分区）
+python3 scripts/patch-immortalwrt-full256.py /path/to/immortalwrt --size full --ext4
+python3 scripts/check-dts.py /path/to/immortalwrt/target/linux/mediatek/dts/mt7622-netgear-wax206.dts
 ```
 
-产物里会有两份 sysupgrade：
+产物：
 
-- `*-squashfs-sysupgrade.bin` — 原方案，根只读，省空间
-- `*-ext4-sysupgrade.bin` — 根可写，能真正用上 172MB UBI
+- `*-squashfs-sysupgrade.bin` — 根只读，省空间
+- `*-ext4-sysupgrade.bin` — 根可写，UBI 247 MiB 全可用
+
+详细说明见 **[docs/IMMORTALWRT.md](docs/IMMORTALWRT.md)**（ImmortalWrt）和
+**[docs/CUSTOM_PACKAGES.md](docs/CUSTOM_PACKAGES.md)**（加包）。
+
+## 加软件包
+
+```bash
+vi packages.txt        # 一行一个包名
+git commit -am "add xxx" && git push
+```
 
 ## 刷机
 
