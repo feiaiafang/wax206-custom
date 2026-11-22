@@ -1,47 +1,49 @@
 #!/usr/bin/env python3
-"""把 ImmortalWrt 的 WAX206 目标改成「firmware 分区吃到 NAND 末尾」的大 UBI 布局。
+"""把 WAX206 的 firmware 分区扩到指定大小（OpenWrt / ImmortalWrt 通用）。
 
-和 OpenWrt 版脚本的区别
-------------------------
-原脚本（patch-wax206-full256.py）是给 openwrt.git 写的，尺寸写死 0xb200000
-（178 MiB），只用了 256MiB NAND 的前 178MiB，尾部 75MiB 白白空着。
-本脚本面向 immortalwrt.git（openwrt-25.12 分支，对应固件选择器上的 25.12.2）：
+⚠️ 这个文件名沿用了原仓库的 `patch-wax206-full256.py`，但内容已重写，
+   能自动识别两种源码树，不要再依赖任何一份旧版副本。
 
-  1. 尺寸可由命令行指定，默认吃满 NAND（--size full），也可沿用保守值 178MiB
-  2. 先把整条 NAND 的分区全解析出来，再算「firmware 能扩到哪」——
-     不再硬编码，避免上游改了布局后静默算错
-  3. 会检查扩出来的范围是否真的以 NAND 末尾为界，越界直接报错
-  4. 同时把 IMAGE_SIZE 写对（sysupgrade.bin 的 check-size 靠它）
+两种源码的 WAX206 分区表在 25.12 这一代是**一样的**（都排到 0x7000000，
+含 Cert/NTGRcryptK/NTGRcryptD/LOG/User_data）。所以同一个脚本两边都能用：
+
+  OpenWrt（openwrt.git，v25.12.5）       ← 实测确认
+  ImmortalWrt（immortalwrt.git，openwrt-25.12，即 firmware-selector 25.12.2）
+
+原仓库那份 OpenWrt 脚本把尺寸写死 0xb200000（178 MiB），只用了 256MiB NAND
+的前 178MiB，尾部 75MiB 空着；而且它只删到 firmware_backup 之后那几个分区，
+**漏删了 Cert/NTGRcryptK/NTGRcryptD/LOG/User_data**（在 0x61c0000~0x7000000），
+扩到 178MiB 时刚好不重叠所以没暴露，一旦扩更大就会撞上。
+
+本脚本的做法：
+  1. 尺寸由 --size 指定，默认 full = 吃满到 NAND 末尾
+  2. 先解析 DTS 里全部顶层分区，按真实占用算能扩到哪，不硬编码
+  3. 自动删除 firmware 之后的所有顶层分区（两个发行版都覆盖）
+  4. 会检查扩出来的范围不越过 NAND 末尾，越界直接拒绝
   5. --ext4 额外把 target 的 FILESYSTEMS 加上 ext4，
      产出 ...-ext4-sysupgrade.bin（根可写，真正用满 UBI）
 
-分区事实（immortalwrt openwrt-25.12 的 mt7622-netgear-wax206.dts，实测）
-------------------------------------------------------------------------
-  0x0000000  Preloader        0x80000
-  0x0080000  ATF              0x40000
-  0x00c0000  Bootloader       0x80000
-  0x0140000  Config           0x80000
-  0x01c0000  Factory          0x100000
-  0x02c0000  firmware         0x2600000   ← 要扩的就是它（内含 kernel 6MiB + ubi）
-  0x28c0000  firmware_backup  0x2600000   ┐
-  0x4ec0000  CFG              0x800000    │ 这 6 个在原厂布局里
-  0x56c0000  RAE              0x400000    │ 都会被扩大的 firmware 覆盖，
-  0x5ac0000  POT              0x100000    │ 必须从 DTS 删掉
-  0x5bc0000  Language         0x400000    │
-  0x5fc0000  Traffic          0x200000    ┘
-  NAND 总容量 0x10000000 = 256 MiB
-
-  吃满方案：firmware = 0x10000000 - 0x2c0000 = 0xfd40000 = 253 MiB
-            kernel 6 MiB + ubi 0xf740000 = 247 MiB
-  保守方案：firmware = 0xb200000 = 178 MiB（= 原 OpenWrt 脚本的值）
-            kernel 6 MiB + ubi 0xac00000 = 172 MiB
+分区事实（WAX206，256 MiB NAND）
+--------------------------------
+  0x02c0000  firmware 起点（两个发行版一致）
+  0x600000   kernel 子分区，6 MiB（对应 mt7622.mk 的 KERNEL_SIZE := 6144k）
+  吃满方案：firmware = 0x10000000 - 0x2c0000 = 0xfd40000 = 253.2 MiB
+            kernel 6 MiB + ubi 247.2 MiB
+  保守方案：firmware = 0xb200000 = 178 MiB（原脚本的值）
+            kernel 6 MiB + ubi 172 MiB
 
 用法
 ----
-    python3 scripts/patch-immortalwrt-full256.py /path/to/immortalwrt
-    python3 scripts/patch-immortalwrt-full256.py /path/to/immortalwrt --size 178m
-    python3 scripts/patch-immortalwrt-full256.py /path/to/immortalwrt --size full --ext4
-    python3 scripts/patch-immortalwrt-full256.py /path/to/immortalwrt --dry-run
+    # ImmortalWrt：吃满 + ext4
+    python3 scripts/patch-wax206-full256.py /path/to/immortalwrt --ext4
+
+    # 上游 OpenWrt：沿用 178MiB
+    python3 scripts/patch-wax206-full256.py /path/to/openwrt --size 178m
+
+    # 只看会怎么改，不动文件
+    python3 scripts/patch-wax206-full256.py /path/to/src --dry-run
+
+改完用 scripts/check-dts.py 复核分区结构。
 """
 
 from __future__ import annotations
@@ -237,6 +239,25 @@ def patch_dts(path: pathlib.Path, fw_size: int, kernel_size: int, dry_run: bool)
     fw_token = f"partition@{FIRMWARE_START:x}"
     fw_start, fw_end = node_range(text, fw_token)
 
+    # 幂等/重复应用保护：先读现有的 firmware 尺寸，和要写入的比。
+    # 之前有个坑：DTS 已经被改过再跑一次，脚本会打印"删除的顶层分区:（无）"
+    # 然后正常退出，看起来像成功，实则尺寸还是上一轮的——很容易误判。
+    cur = re.search(
+        rf"partition@{FIRMWARE_START:x}\s*\{{[^}}]*?reg\s*=\s*<0x{FIRMWARE_START:x}\s+0x([0-9a-fA-F]+)>",
+        text,
+        re.S,
+    )
+    if cur:
+        cur_size = int(cur.group(1), 16)
+        if cur_size == fw_size:
+            print(f"  firmware 已经是 0x{fw_size:x}（{human(fw_size)}），无需修改")
+            # 仍继续走后面的删除逻辑，把可能残留的尾部节点清掉
+        elif cur_size != 0x2600000:
+            # 既不是原始 38MiB，也不是本次目标 → 说明之前跑过别的尺寸
+            print(f"  ⚠ 检测到 firmware 当前是 0x{cur_size:x}（{human(cur_size)}），"
+                  f"不是原始 38MiB，将覆盖为 0x{fw_size:x}（{human(fw_size)}）")
+            print("    若这不是预期行为，请先 git checkout 还原 DTS")
+
     part_start, part_end = node_range(text, "partitions")
     if not (part_start < fw_start < part_end):
         raise RuntimeError(f"{fw_token} 不在 partitions 节点内，DTS 结构已变，请人工检查")
@@ -390,12 +411,39 @@ def parse_size(arg: str, fw_start: int) -> tuple[int, int]:
     return fw, image_k
 
 
+def detect_flavor(root: pathlib.Path) -> str:
+    """识别源码是 ImmortalWrt 还是上游 OpenWrt（仅用于打印提示）。
+
+    实测结论：两边的 WAX206 DTS 分区表在 25.12 这一代**其实是一样的**，
+    都排到 0x7000000（含 Cert/NTGRcryptK/NTGRcryptD/LOG/User_data）。
+    所以判断依据只看 ImmortalWrt 特有的目录/标识，不看分区：
+      - package/emortal   ImmortalWrt 独有的 emortal（配置迁移）包
+      - IMMORTALWRT       版本字符串里出现品牌名
+    """
+    ver = root / "include/version.mk"
+    if ver.is_file():
+        text = ver.read_text(encoding="utf-8")
+        if "IMMORTALWRT" in text.upper():
+            return "immortalwrt"
+    if (root / "package/emortal").exists():
+        return "immortalwrt"
+    return "openwrt"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="ImmortalWrt WAX206：扩展 firmware/UBI 分区",
+        description="WAX206（OpenWrt / ImmortalWrt 通用）：扩展 firmware/UBI 分区",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # ImmortalWrt，吃满 253MiB，同时产出 ext4 根
+  python3 scripts/patch-wax206-full256.py /path/to/immortalwrt --ext4
+
+  # 上游 OpenWrt，沿用原仓库的 178MiB 保守值
+  python3 scripts/patch-wax206-full256.py /path/to/openwrt --size 178m
+""",
     )
-    ap.add_argument("root", help="immortalwrt 源码根目录")
+    ap.add_argument("root", help="OpenWrt / ImmortalWrt 源码根目录")
     ap.add_argument("--size", default="full",
                     help="firmware 分区尺寸：full（吃满 NAND，默认）或 178m 之类的 MiB 值")
     ap.add_argument("--ext4", action="store_true",
@@ -411,11 +459,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"文件不存在: {p}", file=sys.stderr)
             return 1
 
-    # 先校验目标确实是 WAX206 的 immortalwrt 源码
+    # 先校验目标确实是 WAX206 的 OpenWrt/ImmortalWrt 源码
     head = (root / "include/version.mk").read_text(encoding="utf-8")
     if "REVISION" not in head and "VERSION_NUMBER" not in head:
         print("看起来不像 OpenWrt/ImmortalWrt 源码根目录", file=sys.stderr)
         return 1
+
+    flavor = detect_flavor(root)
+    print(f"=== 源码类型: {flavor} ===")
 
     fw_size, image_k = parse_size(args.size, FIRMWARE_START)
     ubi_size = fw_size - KERNEL_SIZE

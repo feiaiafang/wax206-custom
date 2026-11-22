@@ -3,7 +3,7 @@ name: Build WAX206 ImmortalWrt 25.12 扩展分区
 # 完全走 ImmortalWrt 官方编译流程（和 firmware-selector 背后的构建同源）：
 #   clone immortalwrt → feeds update/install → 打扩展分区补丁 → defconfig → make
 # 与 OpenWrt 版 build.yml 的区别：源码换 immortalwrt.git，补丁换
-# patch-immortalwrt-full256.py（能吃满 253MiB，OpenWrt 版只到 178MiB）。
+# patch-wax206-full256.py（能吃满 253MiB，OpenWrt 版只到 178MiB）。
 
 on:
   workflow_dispatch:
@@ -93,7 +93,7 @@ jobs:
           # --ext4 会把 target 的 FILESYSTEMS 加上 ext4（否则只出 squashfs）
           EXTRA=""
           if [ "${{ inputs.build_ext4 }}" = "true" ]; then EXTRA="--ext4"; fi
-          python3 scripts/patch-immortalwrt-full256.py "${OPENWRT_DIR}" \
+          python3 scripts/patch-wax206-full256.py "${OPENWRT_DIR}" \
             --size "${{ inputs.fw_size || 'full' }}" ${EXTRA}
 
       - name: Verify patched DTS structure

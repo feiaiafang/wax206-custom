@@ -22,7 +22,7 @@
 
 | 固件来源 | workflow | 补丁脚本 | 最大 firmware |
 |---|---|---|---|
-| ImmortalWrt（`immortalwrt.git`，firmware-selector 同源） | `build-immortalwrt.yml` | `patch-immortalwrt-full256.py` | **253 MiB（吃满）** |
+| ImmortalWrt（`immortalwrt.git`，firmware-selector 同源） | `build-immortalwrt.yml` | `patch-wax206-full256.py` | **253 MiB（吃满）** |
 | OpenWrt（`openwrt.git`，原仓库） | `build.yml` | `patch-wax206-full256.py` | 178 MiB |
 
 ```bash
@@ -30,7 +30,7 @@
 #   输入 fw_size=full|178m，build_ext4=true/false
 
 # 本地预演（不编译，只验证配置和分区）
-python3 scripts/patch-immortalwrt-full256.py /path/to/immortalwrt --size full --ext4
+python3 scripts/patch-wax206-full256.py /path/to/immortalwrt --size full --ext4
 python3 scripts/check-dts.py /path/to/immortalwrt/target/linux/mediatek/dts/mt7622-netgear-wax206.dts
 ```
 

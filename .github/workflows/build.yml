@@ -16,6 +16,10 @@ on:
         description: '要构建的根文件系统（空格分隔：squashfs ext4）'
         default: 'squashfs ext4'
         required: false
+      thirdparty_oaf:
+        description: '加入 kenzok8/small-package feed（OAF 界面 luci-app-oaf 在这里）'
+        type: boolean
+        default: true
   push:
     branches: [main]
 
@@ -50,6 +54,15 @@ jobs:
           git clone --branch "${OPENWRT_VERSION}" --single-branch --depth=1 \
             https://git.openwrt.org/openwrt/openwrt.git "${OPENWRT_DIR}"
 
+      - name: Add third-party feed (OAF)
+        if: ${{ inputs.thirdparty_oaf != false }}
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          # luci-app-oaf 只在 kenzok8/small-package；它的依赖 appfilter/kmod-oaf
+          # 仍在官方 packages feed。只加这一个第三方源即可。
+          echo "src-git smallpack https://github.com/kenzok8/small-package.git" \
+            >> feeds.conf.default
+
       - name: Update and install feeds
         working-directory: ${{ env.OPENWRT_DIR }}
         run: |
@@ -62,15 +75,39 @@ jobs:
             grep -vE '^\s*(#|$)' ../packages.txt | tr '\n' ' ' \
               | xargs ./scripts/feeds install
           fi
+          # feeds install 在索引未生成时只打印 WARNING 就返回 0，
+          # 会导致包根本没装上、后面 defconfig 静默丢弃。显式复核一次。
+          if [ "${{ inputs.thirdparty_oaf }}" != "false" ]; then
+            if [ ! -d package/feeds/smallpack/luci-app-oaf ]; then
+              echo "::warning::luci-app-oaf 未装成功，手动补装"
+              ./scripts/feeds install -f -p smallpack luci-app-oaf
+            fi
+            test -d package/feeds/smallpack/luci-app-oaf \
+              || { echo "::error::luci-app-oaf 仍然不在 package/feeds"; exit 1; }
+          fi
 
       - name: Apply WAX206 full-NAND layout patch
         run: |
-          python3 scripts/patch-wax206-full256.py "${OPENWRT_DIR}"
+          # 同一份脚本 OpenWrt / ImmortalWrt 通用（自动识别源码类型）。
+          # 默认 full = 吃满 NAND；想沿用原来的 178MiB 就改成 --size 178m。
+          # --ext4 让 target 的 FILESYSTEMS 加上 ext4，否则即使开了
+          # CONFIG_TARGET_ROOTFS_EXT4FS，Device/Build 也不会产出 ext4 镜像。
+          python3 scripts/patch-wax206-full256.py "${OPENWRT_DIR}" --size full --ext4
+
+      - name: Verify patched DTS structure
+        run: |
+          # 补丁只改 DTS 文本，这里做结构校验（括号/孤立分号/残留分区/尺寸）
+          python3 scripts/check-dts.py \
+            "${OPENWRT_DIR}/target/linux/mediatek/dts/mt7622-netgear-wax206.dts"
 
       - name: Resolve package list into .config
         working-directory: ${{ env.OPENWRT_DIR }}
         run: |
           cp ../config/wax206-25.12.5.config .config
+
+          # LuCI 语言包的 Default 是 LUCI_LANG_zh_Hans||(ALL&&m)，
+          # 不开这个开关它们只会是 =m，而目标镜像不出 m 包 → 中文界面消失
+          echo 'CONFIG_LUCI_LANG_zh_Hans=y' >> .config
 
           # ---- 把 packages.txt 逐行翻成 CONFIG_PACKAGE_<name>=y ----
           # 支持行内注释与空行；带 "=n" 的行原样透传，用来显式关掉某个包。

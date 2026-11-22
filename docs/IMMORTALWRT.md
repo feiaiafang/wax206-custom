@@ -58,7 +58,7 @@ OpenWrt 版脚本只删到 `firmware_backup` 之后那几个，且尺寸写死 1
 
 ## 三、脚本做了什么
 
-`scripts/patch-immortalwrt-full256.py`（相对 OpenWrt 版重写）：
+`scripts/patch-wax206-full256.py`（相对 OpenWrt 版重写）：
 
 1. **尺寸可配**：`--size full` 吃满 NAND（253.2 MiB），或 `--size 178m` 沿用保守值
 2. **动态解析**：先扫出所有顶层分区，算真实占用，不硬编码
@@ -101,7 +101,7 @@ DTS 节点写成 `partition@xxx { ... };`——**分号在右大括号外面**�
 
 | 场景 | 用这个 |
 |---|---|
-| 固件来自 `immortalwrt.git` | `scripts/patch-immortalwrt-full256.py` |
+| 固件来自 `immortalwrt.git` | `scripts/patch-wax206-full256.py` |
 | 固件来自 `openwrt.git`（原仓库） | `scripts/patch-wax206-full256.py`（原样保留，未改） |
 
 顺带实测：原 OpenWrt 版脚本**也能**打在 immortalwrt 源码上（路径和锚点一致），
