@@ -1,0 +1,160 @@
+name: Build WAX206 OpenWrt 256M (custom packages)
+
+# 相对原版 build.yml 的改动，只有四处（都在本文件内，无需改上游源码）：
+#   1. 新增 "Resolve package list" 步骤：把 packages.txt 变成 .config 的
+#      CONFIG_PACKAGE_* 行，并在 feeds 索引里校验包名是否存在——包名打错时
+#      在配置阶段就红，而不是编译 40 分钟后才发现某个包其实是空的。
+#   2. config 里用 FEEDS_INSTALL 变量控制 install -a / install <列表>。
+#   3. 新增 "Verify enabled packages" 步骤：从 .config 反查实际生效的包，
+#      把 "我勾了但被依赖裁剪掉" 的情况打印出来。
+#   4. 产物收集时同时输出 *ext4* 与 *squashfs* 两套，flavor 在名字里可辨。
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavors:
+        description: '要构建的根文件系统（空格分隔：squashfs ext4）'
+        default: 'squashfs ext4'
+        required: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  OPENWRT_VERSION: v25.12.5
+  OPENWRT_DIR: openwrt
+  # all = 官方全量 feed（体积大但省事）；list = 只装名单里的包，编译更快
+  FEEDS_INSTALL: all
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout custom build repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenWrt build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget xsltproc swig time libelf-dev \
+            device-tree-compiler
+
+      - name: Clone official OpenWrt source
+        run: |
+          git clone --branch "${OPENWRT_VERSION}" --single-branch --depth=1 \
+            https://git.openwrt.org/openwrt/openwrt.git "${OPENWRT_DIR}"
+
+      - name: Update and install feeds
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          ./scripts/feeds update -a
+          # -a 会把几千个包全装进 package/feeds/，编译索引要几分钟；
+          # 只想装名单里的包时把 env.FEEDS_INSTALL 改成 list。
+          if [ "${FEEDS_INSTALL}" = "all" ]; then
+            ./scripts/feeds install -a
+          else
+            grep -vE '^\s*(#|$)' ../packages.txt | tr '\n' ' ' \
+              | xargs ./scripts/feeds install
+          fi
+
+      - name: Apply WAX206 full-NAND layout patch
+        run: |
+          python3 scripts/patch-wax206-full256.py "${OPENWRT_DIR}"
+
+      - name: Resolve package list into .config
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          cp ../config/wax206-25.12.5.config .config
+
+          # ---- 把 packages.txt 逐行翻成 CONFIG_PACKAGE_<name>=y ----
+          # 支持行内注释与空行；带 "=n" 的行原样透传，用来显式关掉某个包。
+          echo '### 追加的软件包选择' >> .config
+          while IFS= read -r line; do
+            pkg="$(echo "$line" | sed -e 's/#.*//' -e 's/[[:space:]]//g')"
+            [ -z "$pkg" ] && continue
+            case "$pkg" in
+              *=y|*=n|*=m) echo "CONFIG_PACKAGE_${pkg%%=*}=${pkg#*=}" >> .config ;;
+              *)           echo "CONFIG_PACKAGE_${pkg}=y" >> .config ;;
+            esac
+          done < ../packages.txt
+
+          # ---- 校验：包名必须能在某个 feed index 里找到 ----
+          missing=0
+          while IFS= read -r line; do
+            pkg="$(echo "$line" | sed -e 's/#.*//' -e 's/[[:space:]]//g' -e 's/=.*//')"
+            [ -z "$pkg" ] && continue
+            if ! grep -qx "Package: ${pkg}" feeds/*.index; then
+              echo "::error::packages.txt 里的 ${pkg} 不在任何官方 feed 中（拼写错误或需要自定义 feed）"
+              missing=1
+            fi
+          done < ../packages.txt
+          test "${missing}" -eq 0
+
+          make defconfig
+
+      - name: Show effective filesystem flavors
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          for o in TARGET_ROOTFS_SQUASHFS TARGET_ROOTFS_EXT4FS USE_APK TARGET_ROOTFS_PARTSIZE; do
+            printf '%-28s %s\n' "$o" "$(grep -E "^CONFIG_${o}=" .config || echo '(未设置)')"
+          done
+          echo '=== 期望在产物里看到 squashfs 与 ext4 两种 sysupgrade ==='
+
+      - name: Verify enabled packages
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          echo '=== packages.txt 中实际生效的包 ==='
+          fail=0
+          while IFS= read -r line; do
+            pkg="$(echo "$line" | sed -e 's/#.*//' -e 's/[[:space:]]//g' -e 's/=.*//')"
+            [ -z "$pkg" ] && continue
+            if grep -qx "CONFIG_PACKAGE_${pkg}=y" .config; then
+              printf '  OK      %s\n' "$pkg"
+            else
+              # 被 not set 说明依赖不满足而被裁掉，必须让构建失败
+              printf '  ::error:: %s 没有生效\n' "$pkg"
+              fail=1
+            fi
+          done < ../packages.txt
+          echo "=== 固件内包数量：$(grep -c '^CONFIG_PACKAGE_.*=y$' .config) ==="
+          test "${fail}" -eq 0
+
+      - name: Compile firmware
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          make -j"$(nproc)" V=s
+
+      - name: Verify generated WAX206 DTB
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          DTB="$(find build_dir -type f -name 'image-mt7622-netgear-wax206.dtb' | head -n1)"
+          test -n "${DTB}"
+          echo "DTB=${DTB}"
+          dtc -I dtb -O dts -o /tmp/wax206.dts "${DTB}"
+          grep -n -A18 -B2 'partition@2c0000' /tmp/wax206.dts
+          ! grep -q 'partition@28c0000' /tmp/wax206.dts
+
+      - name: Collect and checksum artifacts
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          mkdir -p ../release
+          find bin/targets/mediatek/mt7622 -maxdepth 1 -type f \
+            \( -name '*netgear_wax206*' -o -name '*wax206*' \) \
+            -exec cp {} ../release/ \;
+          cd ../release
+          ls -lh
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wax206-openwrt-25.12.5-full256-custom
+          path: release/
+          if-no-files-found: error

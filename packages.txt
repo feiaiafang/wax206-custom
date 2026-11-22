@@ -1,0 +1,45 @@
+# 编译时要塞进固件的软件包清单
+#
+# 规则：
+#   - 一行一个包名，纯名字即 "编译进固件"（等价 CONFIG_PACKAGE_<name>=y）
+#   - 写 name=n 表示显式关掉（例如把默认选中的某包裁掉）
+#   - # 开头是注释；行尾也可以写注释
+#   - 名字必须是 feeds 索引里真实存在的 Package 名，写错会在 CI 的
+#     "Resolve package list" 步骤直接报错，不会白编译 40 分钟
+#
+# 改完想确认某个包名对不对，在源码目录跑：
+#   ./scripts/feeds update -a && ./scripts/feeds update -i
+#   grep -x "Package: 你的包名" feeds/*.index
+
+# ---- LuCI 界面与中文 ----
+luci
+luci-i18n-base-zh-cn
+
+# ---- LuCI 应用 ----
+luci-app-firewall
+luci-app-sqm
+luci-app-ddns
+luci-app-ttyd
+luci-app-commands
+luci-app-attendedsysupgrade
+luci-app-uhttpd
+luci-i18n-sqm-zh-cn
+luci-i18n-ddns-zh-cn
+luci-i18n-ttyd-zh-cn
+luci-i18n-commands-zh-cn
+luci-i18n-firewall-zh-cn
+
+# ---- 网络 ----
+sqm-scripts        # SQM 本体（只有界面没这个跑不起来）
+zerotier
+adguardhome
+vnstat
+iperf3
+curl
+
+# ---- 系统工具 ----
+nano
+htop
+
+# ---- 显式关闭（举例，按需启用）----
+# luci-app-vnstat2=n
