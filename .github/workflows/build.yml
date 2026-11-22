@@ -66,25 +66,37 @@ jobs:
       - name: Update and install feeds
         working-directory: ${{ env.OPENWRT_DIR }}
         run: |
+          # 顺序：update -a（拉全部 feed 源码，同时生成 feeds/<name>.index）
+          #       → 先单独装第三方包 → 再 install -a 装官方全量。
+          #
+          # 为什么第三方包要单独先装：
+          #   CI 上出现过一个诡异现象——install -a 跑完后（日志里已经遍历到
+          #   video feed 的 weston），package/feeds/smallpack/ 下却没有
+          #   luci-app-oaf，紧接着单独 install -p smallpack 又报
+          #   "No feed for package"，而 feeds/smallpack.index 其实是好的。
+          #   install -a 要遍历 2000+ 个包，smallpack 排在 feeds.conf 最后，
+          #   遍历到那里时的状态不稳定。先把它单独装掉最稳。
+          #
+          # 另一个坑：install 在 index 未就绪时只打印
+          #   "WARNING: No feed for package xxx"
+          # 但返回码仍是 0，包静默丢失，直到 defconfig 才表现为包不存在。
           ./scripts/feeds update -a
-          # -a 会把几千个包全装进 package/feeds/，编译索引要几分钟；
-          # 只想装名单里的包时把 env.FEEDS_INSTALL 改成 list。
-          if [ "${FEEDS_INSTALL}" = "all" ]; then
-            ./scripts/feeds install -a
-          else
-            grep -vE '^\s*(#|$)' ../packages.txt | tr '\n' ' ' \
-              | xargs ./scripts/feeds install
-          fi
-          # feeds install 在索引未生成时只打印 WARNING 就返回 0，
-          # 会导致包根本没装上、后面 defconfig 静默丢弃。显式复核一次。
+
           if [ "${{ inputs.thirdparty_oaf }}" != "false" ]; then
-            if [ ! -d package/feeds/smallpack/luci-app-oaf ]; then
-              echo "::warning::luci-app-oaf 未装成功，手动补装"
-              ./scripts/feeds install -f -p smallpack luci-app-oaf
+            echo "=== 单独安装第三方包（smallpack）==="
+            ./scripts/feeds install -f -p smallpack luci-app-oaf || true
+            if [ ! -e package/feeds/smallpack/luci-app-oaf ]; then
+              echo "::error::luci-app-oaf 装不上。诊断信息："
+              echo "--- feeds.conf.default ---"; cat feeds.conf.default
+              echo "--- feeds/smallpack.index ---"; ls -la feeds/smallpack.index || echo "(不存在)"
+              echo "--- feeds/smallpack 目录 ---"; ls feeds/smallpack 2>/dev/null | head -5 || echo "(不存在)"
+              exit 1
             fi
-            test -d package/feeds/smallpack/luci-app-oaf \
-              || { echo "::error::luci-app-oaf 仍然不在 package/feeds"; exit 1; }
+            echo "✓ package/feeds/smallpack/luci-app-oaf 已就绪"
           fi
+
+          echo "=== 安装官方全量 feed ==="
+          ./scripts/feeds install -a
 
       - name: Apply WAX206 full-NAND layout patch
         run: |

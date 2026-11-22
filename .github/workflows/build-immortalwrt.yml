@@ -71,22 +71,29 @@ jobs:
       - name: Update and install feeds
         working-directory: ${{ env.OPENWRT_DIR }}
         run: |
+          # 顺序：update -a（拉源码+生成 feeds/<name>.index）→ install -a。
+          # 踩过的坑：index 没就绪时 install 只打印
+          #   "WARNING: No feed for package xxx"
+          # 但返回码仍是 0，包静默丢失，直到 defconfig 才表现为包不存在。
           ./scripts/feeds update -a
-          if [ "${FEEDS_INSTALL}" = "all" ]; then
-            ./scripts/feeds install -a
-          else
-            grep -vE '^\s*(#|$)' ../packages.txt | tr '\n' ' ' | xargs ./scripts/feeds install
-          fi
-          # feeds install 在索引未生成时会打印 "No feed for package" 但不报错，
-          # 结果就是包根本没装、后面 defconfig 静默丢弃。这里显式复核一次。
+
+          # 第三方包单独先装（原因见 build.yml 里的同一段注释：
+          # install -a 遍历 2000+ 包时，排在末尾的 third-party feed 状态不稳）
           if [ "${{ inputs.thirdparty_oaf }}" != "false" ]; then
-            if [ ! -d package/feeds/smallpack/luci-app-oaf ]; then
-              echo "::warning::luci-app-oaf 未通过 feeds install 安装，手动补装"
-              ./scripts/feeds install -f -p smallpack luci-app-oaf
+            echo "=== 单独安装第三方包（smallpack）==="
+            ./scripts/feeds install -f -p smallpack luci-app-oaf || true
+            if [ ! -e package/feeds/smallpack/luci-app-oaf ]; then
+              echo "::error::luci-app-oaf 装不上。诊断信息："
+              echo "--- feeds.conf.default ---"; cat feeds.conf.default
+              echo "--- feeds/smallpack.index ---"; ls -la feeds/smallpack.index || echo "(不存在)"
+              echo "--- feeds/smallpack 目录 ---"; ls feeds/smallpack 2>/dev/null | head -5 || echo "(不存在)"
+              exit 1
             fi
-            test -d package/feeds/smallpack/luci-app-oaf \
-              || { echo "::error::luci-app-oaf 仍然不在 package/feeds"; exit 1; }
+            echo "✓ package/feeds/smallpack/luci-app-oaf 已就绪"
           fi
+
+          echo "=== 安装官方全量 feed ==="
+          ./scripts/feeds install -a
 
       - name: Apply extended-partition patch
         run: |
