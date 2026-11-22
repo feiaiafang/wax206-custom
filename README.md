@@ -49,6 +49,13 @@ vi packages.txt        # 一行一个包名
 git commit -am "add xxx" && git push
 ```
 
+已内置、需要第三方 feed 的：**OAF**（`luci-app-oaf` 在 `kenzok8/small-package`）。
+workflow 的 `thirdparty_oaf` 输入控制是否加这个源，默认开。
+详见 **[docs/ADD_OAF_FRPC.md](docs/ADD_OAF_FRPC.md)**（含 frpc 和中文界面的说明）。
+
+> 注意：`feeds install` 在索引未生成时只打 WARNING 不报错，会让包静默丢失。
+> CI 里已加显式复核，改包后请看 "Verify enabled packages" 那步的输出。
+
 ## 刷机
 
 沿用原仓库流程（NMRPflash 刷 recovery → `sysupgrade -n`），**但注意**：

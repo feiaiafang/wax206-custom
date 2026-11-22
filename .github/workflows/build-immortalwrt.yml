@@ -16,6 +16,10 @@ on:
         description: '同时构建 ext4 根（根可写，真正用满 UBI）'
         type: boolean
         default: true
+      thirdparty_oaf:
+        description: '加入 kenzok8/small-package feed（OAF 界面 luci-app-oaf 在这里）'
+        type: boolean
+        default: true
   push:
     branches: [main]
 
@@ -53,6 +57,17 @@ jobs:
           git log --oneline -1
           grep -E 'VERSION_NUMBER|VERSION_REPO' include/version.mk | head -3
 
+      - name: Add third-party feed (OAF)
+        if: ${{ inputs.thirdparty_oaf != false }}
+        working-directory: ${{ env.OPENWRT_DIR }}
+        run: |
+          # luci-app-oaf 不在任何官方 feed，只在 kenzok8/small-package。
+          # 但它的依赖 appfilter / kmod-oaf 在官方 packages feed 里，
+          # 所以只需要这一个第三方源，而且只 sparse 检出 oaf 目录
+          # ——整个仓库 1.7 万个文件，全拉会撑爆 runner 磁盘。
+          echo "src-git smallpack https://github.com/kenzok8/small-package.git" \
+            >> feeds.conf.default
+
       - name: Update and install feeds
         working-directory: ${{ env.OPENWRT_DIR }}
         run: |
@@ -61,6 +76,16 @@ jobs:
             ./scripts/feeds install -a
           else
             grep -vE '^\s*(#|$)' ../packages.txt | tr '\n' ' ' | xargs ./scripts/feeds install
+          fi
+          # feeds install 在索引未生成时会打印 "No feed for package" 但不报错，
+          # 结果就是包根本没装、后面 defconfig 静默丢弃。这里显式复核一次。
+          if [ "${{ inputs.thirdparty_oaf }}" != "false" ]; then
+            if [ ! -d package/feeds/smallpack/luci-app-oaf ]; then
+              echo "::warning::luci-app-oaf 未通过 feeds install 安装，手动补装"
+              ./scripts/feeds install -f -p smallpack luci-app-oaf
+            fi
+            test -d package/feeds/smallpack/luci-app-oaf \
+              || { echo "::error::luci-app-oaf 仍然不在 package/feeds"; exit 1; }
           fi
 
       - name: Apply extended-partition patch
@@ -100,7 +125,7 @@ jobs:
             pkg="$(echo "$line" | sed -e 's/#.*//' -e 's/[[:space:]]//g' -e 's/=.*//')"
             [ -z "$pkg" ] && continue
             if ! grep -qx "Package: ${pkg}" feeds/*.index; then
-              echo "::error::${pkg} 不在任何官方 feed 中"
+              echo "::error::${pkg} 不在任何 feed 索引中（拼写错误，或对应 feed 没加上）"
               missing=1
             fi
           done < ../packages.txt
